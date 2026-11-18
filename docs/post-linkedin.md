@@ -28,7 +28,7 @@ credenciais ou detalhes da minha rede.
 O projeto é para uso pessoal e conteúdo que posso legalmente armazenar e assistir.
 Não é afiliado à Netflix nem aos projetos mencionados.
 
-Repositório: **[inserir link depois da publicação]**
+Repositório: https://github.com/cdiegoo/seviraflix-homelab
 
 Que serviço você adicionaria ou faria diferente nesse homelab?
 
@@ -45,6 +45,6 @@ Estou documentando uma arquitetura genérica para compartilhar o aprendizado e
 ajudar quem quer montar algo parecido com a própria biblioteca de mídia e dentro
 dos direitos de uso.
 
-Repositório: **[inserir link]**
+Repositório: https://github.com/cdiegoo/seviraflix-homelab
 
 #Proxmox #Homelab #SelfHosted #Jellyfin #Tailscale
