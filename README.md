@@ -1,9 +1,7 @@
 # SeViraFlix Homelab
 
-Um guia para montar um servidor pessoal de mídia com **Proxmox VE**, **Jellyfin**
-e acesso remoto privado via **Tailscale**. Pi-hole pode fornecer DNS e bloqueio
-de domínios na rede local. Radarr, Sonarr, Prowlarr e Bazarr ajudam a organizar
-uma biblioteca pessoal.
+Um guia e instalador de laboratório para **Proxmox VE**, **Jellyfin**, **Tailscale**,
+Pi-hole e ferramentas de organização de uma biblioteca pessoal.
 
 > Projeto independente, sem afiliação com Netflix ou com os projetos citados.
 > Use apenas mídia que você tenha direito de armazenar e reproduzir. Este guia
@@ -26,9 +24,30 @@ Dispositivos pessoais
      Armazenamento de mídia
 ```
 
-O desenho é conceitual: a escolha entre VM, LXC e containers depende do hardware,
-das permissões necessárias e da familiaridade de quem administra. Veja
+O instalador cria um LXC Debian dedicado no Proxmox e executa Jellyfin, Pi-hole,
+Radarr, Sonarr, Prowlarr e Bazarr com Docker Compose. Tailscale é instalado no
+guest, mas precisa de autenticação manual na tailnet. Veja
 [`docs/architecture.md`](docs/architecture.md) para detalhes e decisões de rede.
+
+## Instalação automatizada
+
+O Proxmox VE precisa estar **instalado e acessível por SSH** antes de iniciar. Em
+um Mac com Homebrew:
+
+```sh
+make install-deps
+make install-proxmox-serviraflix
+```
+
+O segundo comando pede o IP do nó Proxmox e a senha SSH de `root`. Ele verifica
+bridge, storage, espaço livre e ID de guest; cria o CT `9900` sem substituir
+guests existentes; prepara Docker Compose e os serviços. A senha SSH usa apenas
+um inventário temporário protegido e é removida ao terminar. Um par de chaves
+Ed25519 local é criado em `~/.ssh/seviraflix-homelab`; o instalador também gera
+uma senha inicial para Pi-hole e a exibe ao concluir.
+
+Pré-requisitos, URLs, próximos passos e limitações estão em
+[`docs/installation.md`](docs/installation.md).
 
 ## Componentes
 
@@ -42,19 +61,29 @@ das permissões necessárias e da familiaridade de quem administra. Veja
   metadados e organização da biblioteca. Configure fontes compatíveis com seus
   direitos de uso.
 
-## Antes de começar
+## Limites e segurança
 
-1. Instale e atualize o Proxmox VE em hardware que você controla.
-2. Planeje endereços IP reservados no roteador e capacidade de armazenamento.
-3. Separe as credenciais e tokens em um gerenciador de segredos; nunca os coloque
-   em arquivos versionados.
-4. Configure backups em outro equipamento ou local. Um segundo disco no mesmo
-   host não protege contra perda do host.
-5. Restrinja painéis administrativos à rede local ou à tailnet.
+- O alvo não instala Proxmox VE, não cria a VM externa que o hospeda e não muda
+  automaticamente a bridge do hypervisor. Veja os requisitos de virtualização
+  aninhada em [`docs/installation.md`](docs/installation.md).
+- O CT, o disco e os serviços usam valores genéricos, configuráveis em
+  [`inventory/vars.yml`](inventory/vars.yml). O diretório de mídia começa vazio
+  dentro do disco do CT; aumente/monte armazenamento antes de adicionar mídia.
+- Os painéis são publicados nas portas do guest para a rede local. Não crie
+  port-forward público; limite o acesso administrativo por firewall e use
+  Tailscale para acesso remoto privado.
+- Os containers usam tags `latest`; esta é uma instalação de laboratório, não
+  uma stack com versões imutáveis ou SLA.
+- O playbook não importa configurações, bancos, mídia ou segredos de outra
+  instalação. Não há rotina de backup neste repositório ainda.
+- Use apenas mídia que você tenha direito de armazenar e reproduzir. Configure
+  fontes compatíveis com seus direitos de uso.
 
-Este repositório não contém inventário de uma rede real, playbooks prontos para
-provisionar hosts, credenciais, mídia nem configuração privada. Preencha os
-valores e valide a segurança antes de adaptar qualquer exemplo ao seu ambiente.
+Valide localmente sem se conectar ao Proxmox:
+
+```sh
+make check
+```
 
 ## Publicação
 

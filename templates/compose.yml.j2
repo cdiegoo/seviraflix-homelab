@@ -1,0 +1,85 @@
+version: "3.8"
+
+services:
+  pihole:
+    image: pihole/pihole:latest
+    container_name: seviraflix-pihole
+    environment:
+      TZ: "{{ seviraflix_timezone }}"
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD}"
+      FTLCONF_dns_listeningMode: ALL
+    volumes:
+      - ./pihole/etc-pihole:/etc/pihole
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "8080:80/tcp"
+    restart: unless-stopped
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: seviraflix-jellyfin
+    environment:
+      TZ: "{{ seviraflix_timezone }}"
+    volumes:
+      - ./jellyfin/config:/config
+      - ./jellyfin/cache:/cache
+      - "{{ seviraflix_media_dir }}:/media:ro"
+    ports:
+      - "8096:8096/tcp"
+    restart: unless-stopped
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    container_name: seviraflix-radarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ seviraflix_timezone }}"
+    volumes:
+      - ./radarr/config:/config
+      - "{{ seviraflix_media_dir }}:/media"
+    ports:
+      - "7878:7878/tcp"
+    restart: unless-stopped
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    container_name: seviraflix-sonarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ seviraflix_timezone }}"
+    volumes:
+      - ./sonarr/config:/config
+      - "{{ seviraflix_media_dir }}:/media"
+    ports:
+      - "8989:8989/tcp"
+    restart: unless-stopped
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    container_name: seviraflix-prowlarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ seviraflix_timezone }}"
+    volumes:
+      - ./prowlarr/config:/config
+    ports:
+      - "9696:9696/tcp"
+    restart: unless-stopped
+
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    container_name: seviraflix-bazarr
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "{{ seviraflix_timezone }}"
+    volumes:
+      - ./bazarr/config:/config
+      - "{{ seviraflix_media_dir }}:/media"
+    ports:
+      - "6767:6767/tcp"
+    restart: unless-stopped

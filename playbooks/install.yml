@@ -1,0 +1,369 @@
+---
+- name: Validate Proxmox and create the SeViraFlix container
+  hosts: proxmox
+  gather_facts: false
+  vars_files:
+    - ../inventory/vars.yml
+  tasks:
+    - name: Verify the Proxmox VE command is available
+      ansible.builtin.command:
+        argv:
+          - pveversion
+      changed_when: false
+
+    - name: Verify the configured network bridge
+      ansible.builtin.command:
+        argv:
+          - ip
+          - link
+          - show
+          - "{{ pve_bridge }}"
+      changed_when: false
+
+    - name: Refresh the Proxmox appliance template catalog
+      ansible.builtin.command:
+        argv:
+          - pveam
+          - update
+      changed_when: false
+
+    - name: Find the latest Debian 12 LXC template
+      ansible.builtin.shell:
+        cmd: >-
+          pveam available --section system |
+          awk '{ for (i = 1; i <= NF; i++)
+          if ($i ~ /^debian-12-standard_.*_amd64\.tar\.(zst|gz)$/) print $i }' |
+          sort -V | tail -n 1
+      register: debian_template
+      changed_when: false
+
+    - name: Require an available Debian 12 LXC template
+      ansible.builtin.assert:
+        that:
+          - debian_template.stdout | trim | length > 0
+        fail_msg: "Proxmox does not list an available Debian 12 standard LXC template."
+
+    - name: Check whether the Debian template is already downloaded
+      ansible.builtin.command:
+        argv:
+          - pveam
+          - list
+          - local
+      register: local_templates
+      changed_when: false
+
+    - name: Download the Debian template when missing
+      ansible.builtin.command:
+        argv:
+          - pveam
+          - download
+          - local
+          - "{{ debian_template.stdout | trim }}"
+      when: debian_template.stdout | trim not in local_templates.stdout
+
+    - name: Read Proxmox storage status
+      ansible.builtin.command:
+        argv:
+          - pvesm
+          - status
+          - --output-format
+          - json
+      register: storage_status
+      changed_when: false
+
+    - name: Find the configured storage
+      ansible.builtin.set_fact:
+        selected_storage: >-
+          {{
+            (storage_status.stdout | from_json
+            | selectattr('storage', 'equalto', pve_storage)
+            | list | first) | default({})
+          }}
+
+    - name: Require available storage capacity
+      ansible.builtin.assert:
+        that:
+          - selected_storage | length > 0
+          - selected_storage.active | bool
+          - selected_storage.avail | int >= (pve_min_free_gib | int * 1073741824)
+        fail_msg: >-
+          Storage {{ pve_storage }} is missing, inactive, or has less than
+          {{ pve_min_free_gib }} GiB available.
+
+    - name: Read configuration for the requested container ID
+      ansible.builtin.command:
+        argv:
+          - pct
+          - config
+          - "{{ pve_ct_id | string }}"
+      register: existing_container_config
+      changed_when: false
+      failed_when: false
+
+    - name: Check whether the requested ID is used by a VM
+      ansible.builtin.command:
+        argv:
+          - qm
+          - status
+          - "{{ pve_ct_id | string }}"
+      register: existing_vm
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse to overwrite an existing guest
+      ansible.builtin.assert:
+        that:
+          - existing_vm.rc != 0
+          - >-
+            existing_container_config.rc != 0 or
+            (
+              'hostname: ' ~ pve_ct_name in existing_container_config.stdout and
+              'managed by seviraflix-homelab' in existing_container_config.stdout
+            )
+        fail_msg: >-
+          Guest ID {{ pve_ct_id }} belongs to a VM or an unmanaged/differently
+          named container. Change pve_ct_id in inventory/vars.yml; this
+          installer never removes or adopts existing guests.
+
+    - name: Check for TUN device support on the Proxmox host
+      ansible.builtin.stat:
+        path: /dev/net/tun
+      register: tun_device
+
+    - name: Require TUN support for Tailscale
+      ansible.builtin.assert:
+        that:
+          - tun_device.stat.exists
+        fail_msg: "The Proxmox host has no /dev/net/tun device for the Tailscale guest."
+
+    - name: Install the guest SSH public key on Proxmox
+      ansible.builtin.copy:
+        content: "{{ guest_ssh_public_key }}\n"
+        dest: /root/seviraflix-guest.pub
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Create the SeViraFlix LXC guest when absent
+      ansible.builtin.command:
+        argv:
+          - pct
+          - create
+          - "{{ pve_ct_id | string }}"
+          - "local:vztmpl/{{ debian_template.stdout | trim }}"
+          - --hostname
+          - "{{ pve_ct_name }}"
+          - --cores
+          - "{{ pve_ct_cores | string }}"
+          - --memory
+          - "{{ pve_ct_memory_mb | string }}"
+          - --swap
+          - "{{ pve_ct_swap_mb | string }}"
+          - --rootfs
+          - "{{ pve_storage }}:{{ pve_ct_disk_gb }}"
+          - --net0
+          - "name=eth0,bridge={{ pve_bridge }},ip=dhcp,firewall=1"
+          - --features
+          - nesting=1,keyctl=1
+          - --dev0
+          - path=/dev/net/tun,mode=0666
+          - --unprivileged
+          - "1"
+          - --ostype
+          - debian
+          - --onboot
+          - "1"
+          - --startup
+          - order=3
+          - --ssh-public-keys
+          - /root/seviraflix-guest.pub
+          - --description
+          - "SeViraFlix lab guest; managed by seviraflix-homelab"
+      when: existing_container_config.rc != 0
+
+    - name: Read the guest status
+      ansible.builtin.command:
+        argv:
+          - pct
+          - status
+          - "{{ pve_ct_id | string }}"
+      register: guest_status
+      changed_when: false
+
+    - name: Start the SeViraFlix LXC guest when stopped
+      ansible.builtin.command:
+        argv:
+          - pct
+          - start
+          - "{{ pve_ct_id | string }}"
+      when: "'stopped' in guest_status.stdout"
+
+    - name: Wait for the guest to boot
+      ansible.builtin.pause:
+        seconds: 10
+
+    - name: Install base packages and Docker in the guest
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ pve_ct_id | string }}"
+          - --
+          - bash
+          - -lc
+          - >-
+            apt-get update &&
+            DEBIAN_FRONTEND=noninteractive apt-get install -y
+            ca-certificates curl docker.io docker-compose openssh-server python3
+      register: guest_packages
+      changed_when: guest_packages.rc == 0
+
+    - name: Enable Docker and SSH in the guest
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ pve_ct_id | string }}"
+          - --
+          - systemctl
+          - enable
+          - --now
+          - "{{ item }}"
+      loop:
+        - docker
+        - ssh
+      changed_when: false
+
+    - name: Discover the guest IPv4 address
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ pve_ct_id | string }}"
+          - --
+          - bash
+          - -lc
+          - "ip -4 -o addr show dev eth0 | awk '{split($4, a, \"/\"); print a[1]; exit}'"
+      register: guest_ip
+      changed_when: false
+      retries: 20
+      delay: 5
+      until: guest_ip.stdout | trim | length > 0
+
+    - name: Add the new guest to the in-memory inventory
+      ansible.builtin.add_host:
+        name: seviraflix
+        groups: seviraflix
+        ansible_host: "{{ guest_ip.stdout | trim }}"
+        ansible_user: root
+        ansible_ssh_private_key_file: "{{ guest_ssh_private_key }}"
+        ansible_ssh_common_args: "{{ guest_ssh_common_args }}"
+        pihole_password: "{{ pihole_password }}"
+        seviraflix_timezone: "{{ seviraflix_timezone }}"
+        seviraflix_root: "{{ seviraflix_root }}"
+        seviraflix_media_dir: "{{ seviraflix_media_dir }}"
+      no_log: true
+
+- name: Install and start the SeViraFlix applications
+  hosts: seviraflix
+  gather_facts: true
+  tasks:
+    - name: Install the official Tailscale installer script
+      ansible.builtin.get_url:
+        url: https://tailscale.com/install.sh
+        dest: /usr/local/src/tailscale-install.sh
+        mode: "0755"
+
+    - name: Install Tailscale when absent
+      ansible.builtin.command:
+        argv:
+          - sh
+          - /usr/local/src/tailscale-install.sh
+      args:
+        creates: /usr/bin/tailscale
+
+    - name: Ensure the Tailscale daemon is enabled
+      ansible.builtin.systemd:
+        name: tailscaled
+        enabled: true
+        state: started
+
+    - name: Create persistent application directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "1000"
+        group: "1000"
+        mode: "0750"
+      loop:
+        - "{{ seviraflix_root }}"
+        - "{{ seviraflix_media_dir }}"
+        - "{{ seviraflix_root }}/pihole/etc-pihole"
+        - "{{ seviraflix_root }}/jellyfin/config"
+        - "{{ seviraflix_root }}/jellyfin/cache"
+        - "{{ seviraflix_root }}/radarr/config"
+        - "{{ seviraflix_root }}/sonarr/config"
+        - "{{ seviraflix_root }}/prowlarr/config"
+        - "{{ seviraflix_root }}/bazarr/config"
+
+    - name: Install the Compose definition
+      ansible.builtin.template:
+        src: ../templates/compose.yml.j2
+        dest: "{{ seviraflix_root }}/compose.yml"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Store the generated Pi-hole password
+      ansible.builtin.copy:
+        content: "PIHOLE_PASSWORD={{ pihole_password }}\n"
+        dest: "{{ seviraflix_root }}/.env"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Start the media applications
+      ansible.builtin.command:
+        argv:
+          - docker-compose
+          - --file
+          - "{{ seviraflix_root }}/compose.yml"
+          - up
+          - -d
+      args:
+        chdir: "{{ seviraflix_root }}"
+
+    - name: Confirm the containers are running
+      ansible.builtin.command:
+        argv:
+          - docker
+          - ps
+          - --format
+          - "{{ '{{' }}.Names{{ '}}' }}"
+      register: running_apps
+      changed_when: false
+
+    - name: Require Jellyfin, Pi-hole and the *arr apps to be running
+      ansible.builtin.assert:
+        that:
+          - "'seviraflix-jellyfin' in running_apps.stdout"
+          - "'seviraflix-pihole' in running_apps.stdout"
+          - "'seviraflix-radarr' in running_apps.stdout"
+          - "'seviraflix-sonarr' in running_apps.stdout"
+          - "'seviraflix-prowlarr' in running_apps.stdout"
+          - "'seviraflix-bazarr' in running_apps.stdout"
+        fail_msg: "One or more application containers did not start; inspect docker-compose logs."
+
+    - name: Report application URLs and next steps
+      ansible.builtin.debug:
+        msg:
+          - "Jellyfin: http://{{ ansible_host }}:8096"
+          - "Pi-hole: http://{{ ansible_host }}:8080/admin"
+          - "Radarr: http://{{ ansible_host }}:7878"
+          - "Sonarr: http://{{ ansible_host }}:8989"
+          - "Prowlarr: http://{{ ansible_host }}:9696"
+          - "Bazarr: http://{{ ansible_host }}:6767"
+          - "Tailscale: SSH to this guest as root and run 'tailscale up' to authenticate it."
+          - "Media directory (initially empty): {{ seviraflix_media_dir }}"
+          - "The applications start fresh; this does not restore existing app data."

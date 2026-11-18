@@ -9,3 +9,6 @@
 *.secret
 secrets/
 backups/
+__pycache__/
+*.py[cod]
+ansible.log

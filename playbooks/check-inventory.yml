@@ -1,0 +1,18 @@
+---
+- name: Validate the public installer defaults
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - ../inventory/vars.yml
+  tasks:
+    - name: Require safe resource defaults
+      ansible.builtin.assert:
+        that:
+          - pve_ct_id | int >= 100
+          - pve_ct_cores | int >= 1
+          - pve_ct_memory_mb | int >= 1024
+          - pve_ct_disk_gb | int >= 16
+          - pve_min_free_gib | int >= pve_ct_disk_gb | int
+          - pve_ct_name == "seviraflix"
+        fail_msg: "Installer defaults are inconsistent or unsafe."

@@ -16,6 +16,12 @@ O tráfego de mídia não precisa passar pelo Tailscale quando o cliente está n
 rede local. Para acesso remoto, o dispositivo cliente entra na tailnet e acessa
 o Jellyfin pelo endereço privado atribuído pelo Tailscale.
 
+O quickstart deste repositório coloca as aplicações em Docker Compose dentro de
+um único LXC Debian não privilegiado, com nesting habilitado. É uma escolha
+compacta para laboratório, não uma recomendação de isolamento para produção.
+Tailscale é instalado no próprio guest; a autenticação na tailnet é um passo
+manual após a instalação.
+
 ## Isolamento
 
 - Coloque a administração do Proxmox em uma rede confiável e limite quem pode

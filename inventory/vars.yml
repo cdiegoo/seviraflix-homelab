@@ -1,0 +1,13 @@
+---
+pve_bridge: vmbr0
+pve_storage: local-lvm
+pve_ct_id: 9900
+pve_ct_name: seviraflix
+pve_ct_cores: 2
+pve_ct_memory_mb: 4096
+pve_ct_swap_mb: 1024
+pve_ct_disk_gb: 32
+pve_min_free_gib: 40
+seviraflix_timezone: America/Sao_Paulo
+seviraflix_root: /opt/seviraflix
+seviraflix_media_dir: /srv/seviraflix/media
